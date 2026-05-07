@@ -12,7 +12,9 @@
   UPLOADS_PATH = "./uploads"
 
 # 重定向规则：将 API 请求路由到无服务器函数
+# 注意：serverless-http 会保留完整的路径，所以我们需要配置相应的路由
 [[redirects]]
   from = "/api/*"
-  to = "/.netlify/functions/api/:splat"
+  to = "/.netlify/functions/api"
   status = 200
+  force = true

@@ -45,37 +45,40 @@ async function initializeAuth() {
   if (authToken) {
     // 验证 token 是否有效
     try {
-      // 优先尝试后端 API
-      const res = await fetch('/api/auth/me', {
-        headers: { 'Authorization': `Bearer ${authToken}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        currentUser = data.user;
-        updateAuthUI();
-        return;
+      // 先尝试后端 API
+      try {
+        const res = await fetch('/api/auth/me', {
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          currentUser = data.user;
+          updateAuthUI();
+          return;
+        }
+      } catch (e) {
+        // 后端不可用，继续检查本地
       }
+
+      // 检查本地存储的 token
+      const users = getLocalUsers();
+      for (const username in users) {
+        if (users[username].token === authToken) {
+          currentUser = {
+            username: username,
+            email: users[username].email
+          };
+          updateAuthUI();
+          return;
+        }
+      }
+
+      // Token 无效，清除
+      localStorage.removeItem('auth_token');
+      authToken = null;
     } catch (e) {
-      // 后端不可用，继续检查本地
-      console.log('后端不可用，使用本地认证');
+      console.error('验证 token 失败:', e);
     }
-
-    // 检查本地存储的 token
-    const users = getLocalUsers();
-    for (const username in users) {
-      if (users[username].token === authToken) {
-        currentUser = {
-          username: username,
-          email: users[username].email
-        };
-        updateAuthUI();
-        return;
-      }
-    }
-
-    // Token 无效，清除
-    localStorage.removeItem('auth_token');
-    authToken = null;
   }
 }
 
@@ -576,7 +579,9 @@ document.getElementById('loginForm').addEventListener('submit', async e => {
   submitBtn.textContent = '登录中...';
 
   try {
-    // 优先尝试后端 API
+    let loginSuccess = false;
+
+    // 先尝试后端 API
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -590,48 +595,48 @@ document.getElementById('loginForm').addEventListener('submit', async e => {
         authToken = data.token;
         currentUser = data.user;
         localStorage.setItem('auth_token', authToken);
-
-        updateAuthUI();
-        closeModal('loginOverlay');
-        document.getElementById('loginForm').reset();
-        showToast(i18n.t('toast.loginSuccess'), 'success');
-        return;
-      } else {
-        showToast(data.error || '登录失败', 'error');
-        submitBtn.disabled = false;
-        submitBtn.textContent = i18n.t('login.submit');
-        return;
+        loginSuccess = true;
       }
     } catch (err) {
       // 后端不可用，尝试本地登录
       console.log('后端不可用，尝试本地登录');
     }
 
-    // 本地登录备用方案
-    const users = getLocalUsers();
-
-    // 支持用户名或邮箱登录
-    let user = users[username];
-    if (!user) {
-      for (const u in users) {
-        if (users[u].email === username) {
-          user = users[u];
-          username = u;
-          break;
+    // 如果后端未成功，尝试本地登录
+    if (!loginSuccess) {
+      const users = getLocalUsers();
+      
+      // 支持用户名或邮箱登录
+      let user = users[username];
+      if (!user) {
+        for (const u in users) {
+          if (users[u].email === username) {
+            user = users[u];
+            username = u;
+            break;
+          }
         }
       }
+
+      if (!user || user.password !== password) {
+        showToast('用户名或密码错误', 'error');
+        submitBtn.disabled = false;
+        submitBtn.textContent = i18n.t('login.submit');
+        return;
+      }
+
+      authToken = user.token;
+      currentUser = { username, email: user.email };
+      localStorage.setItem('auth_token', authToken);
+      loginSuccess = true;
     }
 
-    if (!user || user.password !== password) {
-      showToast('用户名或密码错误', 'error');
+    if (!loginSuccess) {
+      showToast('登录失败', 'error');
       submitBtn.disabled = false;
       submitBtn.textContent = i18n.t('login.submit');
       return;
     }
-
-    authToken = user.token;
-    currentUser = { username, email: user.email };
-    localStorage.setItem('auth_token', authToken);
 
     updateAuthUI();
     closeModal('loginOverlay');
