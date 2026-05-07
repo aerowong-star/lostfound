@@ -1,0 +1,18 @@
+[build]
+  command = "npm install"
+  functions = "netlify/functions"
+  publish = "."
+
+[functions]
+  node_bundler = "esbuild"
+
+# 环境变量配置
+[env]
+  DATABASE_PATH = "./database.sqlite"
+  UPLOADS_PATH = "./uploads"
+
+# 重定向规则：将 API 请求路由到无服务器函数
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
