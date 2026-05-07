@@ -24,23 +24,58 @@ const CATEGORY_EMOJI = {
 let currentUser = null;
 let authToken = localStorage.getItem('auth_token');
 
+// 简单的本地用户数据存储
+const LOCAL_USERS_KEY = 'lostfound_users';
+
+function getLocalUsers() {
+  const data = localStorage.getItem(LOCAL_USERS_KEY);
+  return data ? JSON.parse(data) : {};
+}
+
+function saveLocalUsers(users) {
+  localStorage.setItem(LOCAL_USERS_KEY, JSON.stringify(users));
+}
+
+function generateToken() {
+  return 'token_' + Math.random().toString(36).substr(2) + Date.now();
+}
+
 // 声明加载用户信息
 async function initializeAuth() {
   if (authToken) {
     // 验证 token 是否有效
     try {
-      const res = await fetch('/api/auth/me', {
-        headers: { 'Authorization': `Bearer ${authToken}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        currentUser = data.user;
-        updateAuthUI();
-      } else {
-        // Token 无效，清除
-        localStorage.removeItem('auth_token');
-        authToken = null;
+      // 先尝试后端 API
+      try {
+        const res = await fetch('/api/auth/me', {
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          currentUser = data.user;
+          updateAuthUI();
+          return;
+        }
+      } catch (e) {
+        // 后端不可用，继续检查本地
       }
+
+      // 检查本地存储的 token
+      const users = getLocalUsers();
+      for (const username in users) {
+        if (users[username].token === authToken) {
+          currentUser = {
+            username: username,
+            email: users[username].email
+          };
+          updateAuthUI();
+          return;
+        }
+      }
+
+      // Token 无效，清除
+      localStorage.removeItem('auth_token');
+      authToken = null;
     } catch (e) {
       console.error('验证 token 失败:', e);
     }
@@ -544,24 +579,65 @@ document.getElementById('loginForm').addEventListener('submit', async e => {
   submitBtn.textContent = '登录中...';
 
   try {
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
-    });
+    let loginSuccess = false;
 
-    const data = await res.json();
+    // 先尝试后端 API
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
 
-    if (!res.ok) {
-      showToast(data.message || '登录失败', 'error');
+      const data = await res.json();
+
+      if (res.ok) {
+        authToken = data.token;
+        currentUser = data.user;
+        localStorage.setItem('auth_token', authToken);
+        loginSuccess = true;
+      }
+    } catch (err) {
+      // 后端不可用，尝试本地登录
+      console.log('后端不可用，尝试本地登录');
+    }
+
+    // 如果后端未成功，尝试本地登录
+    if (!loginSuccess) {
+      const users = getLocalUsers();
+      
+      // 支持用户名或邮箱登录
+      let user = users[username];
+      if (!user) {
+        for (const u in users) {
+          if (users[u].email === username) {
+            user = users[u];
+            username = u;
+            break;
+          }
+        }
+      }
+
+      if (!user || user.password !== password) {
+        showToast('用户名或密码错误', 'error');
+        submitBtn.disabled = false;
+        submitBtn.textContent = i18n.t('login.submit');
+        return;
+      }
+
+      authToken = user.token;
+      currentUser = { username, email: user.email };
+      localStorage.setItem('auth_token', authToken);
+      loginSuccess = true;
+    }
+
+    if (!loginSuccess) {
+      showToast('登录失败', 'error');
+      submitBtn.disabled = false;
+      submitBtn.textContent = i18n.t('login.submit');
       return;
     }
 
-    // 保存 token 和用户信息
-    authToken = data.token;
-    currentUser = data.user;
-    localStorage.setItem('auth_token', authToken);
-    
     updateAuthUI();
     closeModal('loginOverlay');
     document.getElementById('loginForm').reset();
@@ -590,6 +666,16 @@ document.getElementById('registerForm').addEventListener('submit', async e => {
     return;
   }
 
+  if (username.length < 3 || username.length > 20) {
+    showToast(i18n.t('toast.usernameError'), 'error');
+    return;
+  }
+
+  if (password.length < 6) {
+    showToast(i18n.t('toast.passwordError'), 'error');
+    return;
+  }
+
   if (password !== password2) {
     showToast(i18n.t('toast.passwordMismatch'), 'error');
     return;
@@ -599,24 +685,63 @@ document.getElementById('registerForm').addEventListener('submit', async e => {
   submitBtn.textContent = '注册中...';
 
   try {
-    const res = await fetch('/api/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, email, password })
-    });
+    const users = getLocalUsers();
 
-    const data = await res.json();
-
-    if (!res.ok) {
-      showToast(data.message || '注册失败', 'error');
+    // 检查用户名是否已存在
+    if (users[username]) {
+      showToast('用户名已被使用，请选择其他用户名', 'error');
+      submitBtn.disabled = false;
+      submitBtn.textContent = i18n.t('register.submit');
       return;
     }
 
-    // 自动登录
-    authToken = data.token;
-    currentUser = data.user;
-    localStorage.setItem('auth_token', authToken);
-    
+    // 检查邮箱是否已被注册
+    for (const u in users) {
+      if (users[u].email === email) {
+        showToast('邮箱已被注册，请使用其他邮箱', 'error');
+        submitBtn.disabled = false;
+        submitBtn.textContent = i18n.t('register.submit');
+        return;
+      }
+    }
+
+    // 先尝试调用后端 API
+    let registered = false;
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, email, password })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        authToken = data.token;
+        currentUser = data.user;
+        localStorage.setItem('auth_token', authToken);
+        registered = true;
+      }
+    } catch (err) {
+      // 后端不可用，使用本地注册
+      console.log('后端不可用，使用本地注册');
+    }
+
+    // 如果后端未成功，使用本地注册
+    if (!registered) {
+      const token = generateToken();
+      users[username] = {
+        email,
+        password: password, // 实际应该加密存储，这里仅作演示
+        token,
+        createdAt: Date.now()
+      };
+      saveLocalUsers(users);
+      
+      authToken = token;
+      currentUser = { username, email };
+      localStorage.setItem('auth_token', authToken);
+    }
+
     updateAuthUI();
     closeModal('registerOverlay');
     document.getElementById('registerForm').reset();
