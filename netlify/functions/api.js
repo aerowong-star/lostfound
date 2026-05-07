@@ -9,6 +9,16 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 const serverless = require('serverless-http');
+const crypto = require('crypto');
+
+// ===== 工具函数 =====
+function hashPassword(password) {
+  return crypto.createHash('sha256').update(password).digest('hex');
+}
+
+function generateToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
 
 // 创建 Express 应用
 const app = express();
@@ -204,6 +214,128 @@ app.delete('/api/items/:id', (req, res) => {
  */
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+/**
+ * POST /api/auth/register
+ * 用户注册
+ */
+app.post('/api/auth/register', (req, res) => {
+  const { username, email, password } = req.body;
+
+  if (!username || !email || !password) {
+    return res.status(400).json({ error: '缺少必要字段' });
+  }
+
+  if (username.length < 3 || username.length > 20) {
+    return res.status(400).json({ error: '用户名长度需要 3-20 个字符' });
+  }
+
+  if (password.length < 6) {
+    return res.status(400).json({ error: '密码长度至少 6 个字符' });
+  }
+
+  const passwordHash = hashPassword(password);
+  const token = generateToken();
+  const userId = 'user_' + Date.now();
+
+  db.run(
+    'INSERT INTO users (id, username, email, password_hash, token, createdAt) VALUES (?, ?, ?, ?, ?, ?)',
+    [userId, username, email, passwordHash, token, Date.now()],
+    function(err) {
+      if (err) {
+        if (err.message.includes('UNIQUE constraint failed: users.username')) {
+          return res.status(400).json({ error: '用户名已被使用' });
+        }
+        if (err.message.includes('UNIQUE constraint failed: users.email')) {
+          return res.status(400).json({ error: '邮箱已被注册' });
+        }
+        return res.status(500).json({ error: err.message });
+      }
+
+      res.json({
+        success: true,
+        token,
+        user: { id: userId, username, email }
+      });
+    }
+  );
+});
+
+/**
+ * POST /api/auth/login
+ * 用户登录
+ */
+app.post('/api/auth/login', (req, res) => {
+  const { username, password } = req.body;
+
+  if (!username || !password) {
+    return res.status(400).json({ error: '缺少必要字段' });
+  }
+
+  const passwordHash = hashPassword(password);
+
+  // 支持用户名或邮箱登录
+  db.get(
+    'SELECT * FROM users WHERE (username = ? OR email = ?) AND password_hash = ?',
+    [username, username, passwordHash],
+    function(err, row) {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+
+      if (!row) {
+        return res.status(401).json({ error: '用户名或密码错误' });
+      }
+
+      // 生成新 token
+      const newToken = generateToken();
+      db.run('UPDATE users SET token = ? WHERE id = ?', [newToken, row.id], (err) => {
+        if (err) console.error('更新 token 失败:', err);
+
+        res.json({
+          success: true,
+          token: newToken,
+          user: {
+            id: row.id,
+            username: row.username,
+            email: row.email
+          }
+        });
+      });
+    }
+  );
+});
+
+/**
+ * GET /api/auth/me
+ * 获取当前用户信息
+ */
+app.get('/api/auth/me', (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: '未授权' });
+  }
+
+  const token = authHeader.substring(7);
+
+  db.get('SELECT id, username, email FROM users WHERE token = ?', [token], (err, row) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+
+    if (!row) {
+      return res.status(401).json({ error: 'Token 无效' });
+    }
+
+    res.json({
+      user: {
+        id: row.id,
+        username: row.username,
+        email: row.email
+      }
+    });
+  });
 });
 
 // 错误处理
