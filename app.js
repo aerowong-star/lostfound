@@ -328,27 +328,43 @@ document.getElementById('publishForm').addEventListener('submit', async e => {
   submitBtn.textContent = '发布中...';
 
   try {
-    // 构建数据并提交（图片直接使用 Base64 数据随表单一同提交）
+    // 构建数据并提交
     const newItem = {
       id:        'item_' + Date.now(),
-      type, title, category, date, location, desc, contact,
+      userId:    currentUser ? currentUser.username : null,
+      type, 
+      title, 
+      category, 
+      date, 
+      location, 
+      desc, 
+      contact,
       images:    pendingImages.map(p => p.dataUrl),
       createdAt: Date.now(),
-      status:    type
+      status:    'open' // 初始状态为开放
     };
+
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
 
     const res = await fetch('/api/items', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${authToken}`
-      },
+      headers: headers,
       body: JSON.stringify(newItem)
     });
 
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.message || '上传数据失败');
+      try {
+        const err = await res.json();
+        throw new Error(err.error || err.message || '发布失败');
+      } catch (e) {
+        throw new Error('发布失败，请稍后重试');
+      }
     }
 
     await loadData(); // 重新拉取数据
